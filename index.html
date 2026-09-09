@@ -471,13 +471,16 @@ checkButton.addEventListener("click", async function() {
 
   }
 
-  catch(error) {
+catch(error) {
 
     console.error(error);
 
     status.innerHTML =
-      "❌ 解析中にエラーが発生しました。<br>" +
-      "PDFの読み込みまたはOCRでエラーが発生しました。";
+      "❌ エラーが発生しました。<br><br>" +
+      "<strong>エラー内容：</strong><br>" +
+      error.message;
+
+}
 
   }
 
