@@ -3,14 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
   <title>感知器番号チェック</title>
 
+  <!-- PDF.js -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs"
+          type="module"></script>
+
+  <!-- Tesseract OCR -->
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
 
   <style>
+    * {
+      box-sizing: border-box;
+    }
+
     body {
-      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
       margin: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
       background: #f5f5f7;
       color: #222;
     }
@@ -28,26 +38,26 @@
 
     .description {
       color: #666;
-      margin-bottom: 25px;
+      margin-bottom: 20px;
     }
 
-    .upload-box {
+    .box {
       background: white;
       border-radius: 16px;
-      padding: 25px;
-      text-align: center;
+      padding: 20px;
+      margin-bottom: 15px;
       box-shadow: 0 2px 10px rgba(0,0,0,0.08);
     }
 
     input[type="file"] {
       width: 100%;
-      padding: 15px 0;
+      padding: 10px 0;
     }
 
     button {
       width: 100%;
-      margin-top: 15px;
       padding: 15px;
+      margin-top: 15px;
       border: none;
       border-radius: 12px;
       background: #007aff;
@@ -60,27 +70,21 @@
       background: #aaa;
     }
 
-    #preview {
-      max-width: 100%;
-      margin-top: 20px;
-      border-radius: 10px;
-      display: none;
-    }
-
     .status {
-      margin-top: 20px;
-      padding: 15px;
-      background: white;
-      border-radius: 12px;
       display: none;
+      margin-top: 15px;
+      padding: 15px;
+      border-radius: 12px;
+      background: #f0f0f2;
+      line-height: 1.6;
     }
 
     .result {
-      margin-top: 20px;
+      display: none;
       background: white;
       border-radius: 16px;
       padding: 20px;
-      display: none;
+      margin-top: 15px;
     }
 
     .ok {
@@ -95,14 +99,22 @@
       font-weight: bold;
     }
 
-    .number-list {
+    .page {
       margin-top: 15px;
-      line-height: 1.8;
+      padding: 12px;
+      background: #f5f5f7;
+      border-radius: 10px;
     }
 
     .duplicate {
       color: #d32f2f;
       font-weight: bold;
+    }
+
+    .small {
+      color: #777;
+      font-size: 14px;
+      margin-top: 8px;
     }
   </style>
 </head>
@@ -114,36 +126,40 @@
   <h1>🚨 感知器番号チェック</h1>
 
   <div class="description">
-    図面をアップロードして、感知器プロット番号の重複をチェックします。
+    消防設備図面のPDFから番号を読み取り、重複している番号をチェックします。
   </div>
 
-  <div class="upload-box">
+  <div class="box">
 
     <input
       type="file"
       id="fileInput"
-      accept="image/*,application/pdf"
+      accept="application/pdf,image/*"
     >
-
-    <img id="preview">
 
     <button id="checkButton" disabled>
       番号をチェックする
     </button>
 
-  </div>
+    <div id="status" class="status"></div>
 
-  <div id="status" class="status"></div>
+  </div>
 
   <div id="result" class="result"></div>
 
 </div>
 
 
-<script>
+<script type="module">
+
+import * as pdfjsLib from
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.min.mjs";
+
+pdfjsLib.GlobalWorkerOptions.workerSrc =
+  "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/4.4.168/pdf.worker.min.mjs";
+
 
 const fileInput = document.getElementById("fileInput");
-const preview = document.getElementById("preview");
 const checkButton = document.getElementById("checkButton");
 const status = document.getElementById("status");
 const result = document.getElementById("result");
@@ -151,7 +167,10 @@ const result = document.getElementById("result");
 let selectedFile = null;
 
 
+// -------------------------
 // ファイル選択
+// -------------------------
+
 fileInput.addEventListener("change", function(event) {
 
   selectedFile = event.target.files[0];
@@ -161,78 +180,223 @@ fileInput.addEventListener("change", function(event) {
     return;
   }
 
-  const reader = new FileReader();
-
-  reader.onload = function(e) {
-    preview.src = e.target.result;
-    preview.style.display = "block";
-  };
-
-  reader.readAsDataURL(selectedFile);
-
   checkButton.disabled = false;
 
   result.style.display = "none";
 
   status.style.display = "block";
-  status.innerHTML = "図面を読み込みました。";
+
+  status.innerHTML =
+    "📄 ファイルを選択しました。<br>" +
+    selectedFile.name;
 
 });
 
 
-// OCR開始
+// -------------------------
+// チェック開始
+// -------------------------
+
 checkButton.addEventListener("click", async function() {
 
   if (!selectedFile) return;
 
   checkButton.disabled = true;
 
-  status.style.display = "block";
-  status.innerHTML = "🔍 図面を解析しています……<br>少し時間がかかる場合があります。";
-
   result.style.display = "none";
-
 
   try {
 
-    const { data: { text } } = await Tesseract.recognize(
-      selectedFile,
-      "eng",
-      {
-        logger: info => {
+    let allNumbers = [];
 
-          if (info.status === "recognizing text") {
+    // =========================
+    // PDFの場合
+    // =========================
 
-            const percent = Math.round(info.progress * 100);
+    if (selectedFile.type === "application/pdf") {
 
-            status.innerHTML =
-              "🔍 図面を解析中…… " + percent + "%";
+      status.innerHTML =
+        "📄 PDFを読み込んでいます……";
 
-          }
+      const arrayBuffer =
+        await selectedFile.arrayBuffer();
 
-        }
+      const pdf =
+        await pdfjsLib.getDocument({
+          data: arrayBuffer
+        }).promise;
+
+      const totalPages = pdf.numPages;
+
+      status.innerHTML =
+        `📄 ${totalPages}ページの図面を確認します……`;
+
+      // ページごとに処理
+      for (let pageNumber = 1;
+           pageNumber <= totalPages;
+           pageNumber++) {
+
+        status.innerHTML =
+          `🔍 ${pageNumber} / ${totalPages} ページを解析中……`;
+
+        const page =
+          await pdf.getPage(pageNumber);
+
+        // OCR用に高めの解像度でレンダリング
+        const scale = 2.0;
+
+        const viewport =
+          page.getViewport({
+            scale: scale
+          });
+
+        const canvas =
+          document.createElement("canvas");
+
+        const context =
+          canvas.getContext("2d");
+
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+
+        await page.render({
+          canvasContext: context,
+          viewport: viewport
+        }).promise;
+
+
+        // OCR
+        const resultOCR =
+          await Tesseract.recognize(
+            canvas,
+            "eng",
+            {
+              logger: info => {
+
+                if (info.status === "recognizing text") {
+
+                  const percent =
+                    Math.round(info.progress * 100);
+
+                  status.innerHTML =
+                    `🔍 ${pageNumber} / ${totalPages} ページ解析中…… ${percent}%`;
+
+                }
+
+              }
+            }
+          );
+
+
+        const text =
+          resultOCR.data.text;
+
+        console.log(
+          `ページ ${pageNumber} OCR結果:`,
+          text
+        );
+
+
+        // 数字を抽出
+        const numbers =
+          text.match(/\b\d+\b/g) || [];
+
+
+        numbers.forEach(number => {
+
+          allNumbers.push({
+            number: number,
+            page: pageNumber
+          });
+
+        });
+
       }
-    );
+
+    }
+
+    // =========================
+    // 画像の場合
+    // =========================
+
+    else {
+
+      status.innerHTML =
+        "🔍 画像を解析しています……";
+
+      const resultOCR =
+        await Tesseract.recognize(
+          selectedFile,
+          "eng",
+          {
+            logger: info => {
+
+              if (info.status === "recognizing text") {
+
+                const percent =
+                  Math.round(info.progress * 100);
+
+                status.innerHTML =
+                  `🔍 画像を解析中…… ${percent}%`;
+
+              }
+
+            }
+          }
+        );
 
 
-    console.log("OCR結果:", text);
+      const text =
+        resultOCR.data.text;
+
+      console.log("OCR結果:", text);
 
 
-    // 数字だけを抽出
-    const numbers = text.match(/\b\d+\b/g) || [];
+      const numbers =
+        text.match(/\b\d+\b/g) || [];
 
 
+      numbers.forEach(number => {
+
+        allNumbers.push({
+          number: number,
+          page: 1
+        });
+
+      });
+
+    }
+
+
+    // =========================
     // 重複チェック
+    // =========================
+
     const count = {};
 
-    numbers.forEach(num => {
-      count[num] = (count[num] || 0) + 1;
+    allNumbers.forEach(item => {
+
+      if (!count[item.number]) {
+
+        count[item.number] = [];
+
+      }
+
+      count[item.number].push(item.page);
+
     });
 
 
-    const duplicates = Object.keys(count)
-      .filter(num => count[num] > 1);
+    const duplicates =
+      Object.keys(count)
+        .filter(number =>
+          count[number].length > 1
+        );
 
+
+    // =========================
+    // 結果表示
+    // =========================
 
     result.style.display = "block";
 
@@ -240,33 +404,70 @@ checkButton.addEventListener("click", async function() {
     if (duplicates.length === 0) {
 
       result.innerHTML = `
+
         <div class="ok">
           ✅ 重複している番号はありません
         </div>
 
-        <div class="number-list">
-          認識した番号：${numbers.length}個
-        </div>
-      `;
-
-    } else {
-
-      result.innerHTML = `
-        <div class="error">
-          ⚠️ 重複している番号があります
+        <div class="small">
+          認識した数字：${allNumbers.length}個
         </div>
 
-        <div class="number-list">
-          <strong>重複番号：</strong><br>
-          ${duplicates.map(num =>
-            `<span class="duplicate">${num}（${count[num]}回）</span>`
-          ).join("<br>")}
-        </div>
       `;
 
     }
 
-    status.innerHTML = "解析が完了しました。";
+    else {
+
+      let duplicateHTML = "";
+
+      duplicates.forEach(number => {
+
+        const pages =
+          count[number]
+            .map(page => `${page}ページ`)
+            .join("、");
+
+        duplicateHTML += `
+
+          <div class="page">
+
+            <span class="duplicate">
+              番号 ${number}
+            </span>
+
+            <br>
+
+            出現箇所：
+            ${pages}
+
+          </div>
+
+        `;
+
+      });
+
+
+      result.innerHTML = `
+
+        <div class="error">
+          ⚠️ 重複している番号があります
+        </div>
+
+        <div class="small">
+          重複番号：${duplicates.length}種類
+        </div>
+
+        ${duplicateHTML}
+
+      `;
+
+    }
+
+
+    status.innerHTML =
+      "✅ 解析が完了しました。";
+
 
   }
 
@@ -275,9 +476,11 @@ checkButton.addEventListener("click", async function() {
     console.error(error);
 
     status.innerHTML =
-      "❌ 解析中にエラーが発生しました。";
+      "❌ 解析中にエラーが発生しました。<br>" +
+      "PDFの読み込みまたはOCRでエラーが発生しました。";
 
   }
+
 
   checkButton.disabled = false;
 
